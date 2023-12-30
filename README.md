@@ -23,7 +23,7 @@ The code is developed using python 3.8 on Ubuntu 16.04. NVIDIA GPUs are needed. 
 
 ```
 python tools/test_dag.py \
-    --cfg experiments/coco/hrnet/w32_256x192_adam_lr1e-3.yaml \
+    --cfg experiments/coco/DAG/w32_256x192_adam_lr1e-3.yaml \
     TEST.MODEL_FILE models/pytorch/pose_dag/DAG_w32_256x192.pth \
     TEST.USE_GT_BBOX False
 ```
@@ -32,7 +32,7 @@ python tools/test_dag.py \
 
 ```
 python tools/train.py \
-    --cfg experiments/coco/hrnet/w32_256x192_adam_lr1e-3.yaml
+    --cfg experiments/coco/DAG/w32_256x192_adam_lr1e-3.yaml
 ```
 
 
