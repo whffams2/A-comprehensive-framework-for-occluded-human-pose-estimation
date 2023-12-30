@@ -2,6 +2,7 @@
 # Copyright (c) Microsoft
 # Licensed under the MIT License.
 # Written by Bin Xiao (Bin.Xiao@microsoft.com)
+# Modified by Linhao Xu
 # ------------------------------------------------------------------------------
 
 from __future__ import absolute_import
@@ -16,7 +17,7 @@ import cv2
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-import mmcv
+# import mmcv
 from utils.transforms import get_affine_transform
 from utils.transforms import affine_transform
 from utils.transforms import fliplr_joints
@@ -41,8 +42,8 @@ class JointsDatasetCP(Dataset):
         self.to_float32 = False
         self.color_type = 'color'
         self.channel_order = 'rgb'
-        self.file_client_args = dict(backend='disk')
-        self.file_client = mmcv.FileClient(**self.file_client_args)
+        # self.file_client_args = dict(backend='disk')
+        # self.file_client = mmcv.FileClient(**self.file_client_args)
 
         self.scale_factor = cfg.DATASET.SCALE_FACTOR
         self.rotation_factor = cfg.DATASET.ROT_FACTOR
@@ -143,16 +144,16 @@ class JointsDatasetCP(Dataset):
 
         return image
     
-    def _read_image(self, path):
-        img_bytes = self.file_client.get(path)
-        img = mmcv.imfrombytes(
-            img_bytes, flag=self.color_type, channel_order=self.channel_order)
-        if img is None:
-            raise ValueError(f'Fail to read {path}')
-        if self.to_float32:
-            img = img.astype(np.float32)
-        return img
-    
+    # def _read_image(self, path):
+    #     img_bytes = self.file_client.get(path)
+    #     img = mmcv.imfrombytes(
+    #         img_bytes, flag=self.color_type, channel_order=self.channel_order)
+    #     if img is None:
+    #         raise ValueError(f'Fail to read {path}')
+    #     if self.to_float32:
+    #         img = img.astype(np.float32)
+    #     return img
+    #
     def __getitem__(self, idx):
         db_rec = copy.deepcopy(self.db[idx])
 
@@ -160,18 +161,18 @@ class JointsDatasetCP(Dataset):
         filename = db_rec['filename'] if 'filename' in db_rec else ''
         imgnum = db_rec['imgnum'] if 'imgnum' in db_rec else ''
 
-        # if self.data_format == 'zip':
-        #     from utils import zipreader
-        #     data_numpy = zipreader.imread(
-        #         image_file, cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
-        #     )
-        # else:
-        #     data_numpy = cv2.imread(
-        #         image_file, cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
-        #     )
-        # if self.color_rgb:
-        #     data_numpy = cv2.cvtColor(data_numpy, cv2.COLOR_BGR2RGB)
-        data_numpy = self._read_image(image_file)
+        if self.data_format == 'zip':
+            from utils import zipreader
+            data_numpy = zipreader.imread(
+                image_file, cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
+            )
+        else:
+            data_numpy = cv2.imread(
+                image_file, cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
+            )
+        if self.color_rgb:
+            data_numpy = cv2.cvtColor(data_numpy, cv2.COLOR_BGR2RGB)
+        # data_numpy = self._read_image(image_file)
 
         if data_numpy is None:
             logger.error('=> fail to read {}'.format(image_file))
@@ -231,43 +232,43 @@ class JointsDatasetCP(Dataset):
             if self.use_mask_joints:
                 if np.random.rand() < self.prob_mask_joints:
                     input = self.mask_joint(input, joints, MASK_JOINT_NUM=2)
-        #     if self.use_sa:
-        #         if np.random.randn() < self.paste_prob:
-        #             # if np.random.randn() < 1:
-        #             t_type_idx = random.randint(0, len(self.instance_proveider.candidate_parts) - 1)
-        #             t_type = self.instance_proveider.candidate_parts[t_type_idx]
-        #             part_ann = random.sample(self.instance_proveider.part_anns[t_type], 1)[0]
-        #             path = os.path.join(self.instance_proveider.part_root_dir, t_type, part_ann['file_name'])
-        #             part_img = cv2.imread(path, cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
-        #             part_img = cv2.cvtColor(part_img, cv2.COLOR_BGR2RGB)
-        #             scale_factor = random.uniform(*self.instance_proveider.scale_range)
-        #             # part_joints = np.array(part_ann['keypoints']).reshape(-1, 3)
-        #             # part_img, part_joints = self.instance_proveider. \
-        #             #     adjust_scale_by_diagnal(part_img, part_joints,
-        #             #                             bbox,
-        #             #                             self.instance_proveider.part_scale[t_type],
-        #             #                             scale_factor)
-        #             part_mask = (cv2.cvtColor(part_img, cv2.COLOR_RGB2GRAY) > 0).astype(np.float32)
-        #             erode_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        #             part_mask = cv2.erode(part_mask, erode_kernel, 1)
-        #             part_mask = cv2.GaussianBlur(part_mask, (3, 3), 0)
-        #             part_mask = part_mask[:, :, np.newaxis]
-        #             Hp, Wp = part_mask.shape[:2]
-        #             center = np.array([Hp // 2, Wp // 2])
-        #             scale = self.image_size / 200
-        #             trans = get_affine_transform(center, scale, 0.0, self.image_size)
-        #             part_img = cv2.warpAffine(part_img, trans,
-        #                                       (int(self.image_size[0]), int(self.image_size[1])),
-        #                                       flags=cv2.INTER_LINEAR)
-        #             part_mask = cv2.warpAffine(part_mask, trans,
-        #                                        (int(self.image_size[0]), int(self.image_size[1])),
-        #                                        flags=cv2.INTER_LINEAR)
-        #             mask = np.zeros_like(input)
-        #             mask[:, :, 0] = part_mask
-        #             mask[:, :, 1] = part_mask
-        #             mask[:, :, 2] = part_mask
-        #             input = input * (1 - mask) + part_img * mask
-        #             # cv2.imwrite('aug_img'+part_ann['file_name'][:-4] + '.jpg', input)
+            if self.use_sa:
+                if np.random.randn() < self.paste_prob:
+                    # if np.random.randn() < 1:
+                    t_type_idx = random.randint(0, len(self.instance_proveider.candidate_parts) - 1)
+                    t_type = self.instance_proveider.candidate_parts[t_type_idx]
+                    part_ann = random.sample(self.instance_proveider.part_anns[t_type], 1)[0]
+                    path = os.path.join(self.instance_proveider.part_root_dir, t_type, part_ann['file_name'])
+                    part_img = cv2.imread(path, cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
+                    part_img = cv2.cvtColor(part_img, cv2.COLOR_BGR2RGB)
+                    scale_factor = random.uniform(*self.instance_proveider.scale_range)
+                    # part_joints = np.array(part_ann['keypoints']).reshape(-1, 3)
+                    # part_img, part_joints = self.instance_proveider. \
+                    #     adjust_scale_by_diagnal(part_img, part_joints,
+                    #                             bbox,
+                    #                             self.instance_proveider.part_scale[t_type],
+                    #                             scale_factor)
+                    part_mask = (cv2.cvtColor(part_img, cv2.COLOR_RGB2GRAY) > 0).astype(np.float32)
+                    erode_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+                    part_mask = cv2.erode(part_mask, erode_kernel, 1)
+                    part_mask = cv2.GaussianBlur(part_mask, (3, 3), 0)
+                    part_mask = part_mask[:, :, np.newaxis]
+                    Hp, Wp = part_mask.shape[:2]
+                    center = np.array([Hp // 2, Wp // 2])
+                    scale = self.image_size / 200
+                    trans = get_affine_transform(center, scale, 0.0, self.image_size)
+                    part_img = cv2.warpAffine(part_img, trans,
+                                              (int(self.image_size[0]), int(self.image_size[1])),
+                                              flags=cv2.INTER_LINEAR)
+                    part_mask = cv2.warpAffine(part_mask, trans,
+                                               (int(self.image_size[0]), int(self.image_size[1])),
+                                               flags=cv2.INTER_LINEAR)
+                    mask = np.zeros_like(input)
+                    mask[:, :, 0] = part_mask
+                    mask[:, :, 1] = part_mask
+                    mask[:, :, 2] = part_mask
+                    input = input * (1 - mask) + part_img * mask
+                    # cv2.imwrite('aug_img'+part_ann['file_name'][:-4] + '.jpg', input)
 
         if self.transform:
             input = self.transform(input)

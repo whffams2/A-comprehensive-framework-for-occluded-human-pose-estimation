@@ -1,10 +1,3 @@
-# ------------------------------------------------------------------------------
-# pose.pytorch
-# Copyright (c) 2018-present Microsoft
-# Licensed under The Apache-2.0 License [see LICENSE for details]
-# Written by Bin Xiao (Bin.Xiao@microsoft.com)
-# ------------------------------------------------------------------------------
-
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -25,8 +18,8 @@ import _init_paths
 from config import cfg
 from config import update_config
 from core.loss import JointsMSELoss
-from core.function_sem import train, gcn_train
-from core.function_sem import validate, gcn_validate
+from core.function_dag import train, gcn_train
+from core.function_dag import validate, gcn_validate
 from utils.utils import create_logger
 from utils.graph_utils import *
 
@@ -135,7 +128,7 @@ def main():
 
     # evaluate on validation set
     gcn_validate(cfg, valid_loader, valid_dataset, model, gcn, criterion,
-             final_output_dir, tb_log_dir)
+                 final_output_dir, tb_log_dir)
 
 
 if __name__ == '__main__':

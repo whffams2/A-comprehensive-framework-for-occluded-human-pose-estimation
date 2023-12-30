@@ -9,8 +9,8 @@ import os
 import os.path
 import json_tricks as json
 import numpy as np
-from crowdposetools.coco import COCO
-from crowdposetools.cocoeval import COCOeval
+# from crowdposetools.coco import COCO
+# from crowdposetools.cocoeval import COCOeval
 from dataset.JointsDataset import JointsDataset
 from utils.InstanceProvider import InstanceProvider
 from nms.nms import oks_nms

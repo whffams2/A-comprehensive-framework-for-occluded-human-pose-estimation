@@ -2,6 +2,7 @@
 # Copyright (c) Microsoft
 # Licensed under the MIT License.
 # Written by Bin Xiao (Bin.Xiao@microsoft.com)
+# Modified by Linhao Xu
 # ------------------------------------------------------------------------------
 
 from __future__ import absolute_import
@@ -12,6 +13,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.cuda.comm
+from utils.attention import ChannelAttention, Spatial_Attention
 from utils.non_local_embedded_gaussian import NONLocalBlock2D
 from utils.graph_utils import *
 from config import cfg
@@ -330,11 +332,6 @@ class ExtendSkeletonGraphConv(nn.Module):
                 self.adj_ext3_sub = nn.Parameter(torch.ones_like(adj_ext3))
                 nn.init.constant_(self.adj_ext3_sub, 1e-6)
 
-        # if self.skeleton_graph == 4:
-        #     self.adj_ext4 = adj_ext4
-        #     if self.NoAffinityModulation is not True:
-        #         self.adj_ext4_sub = nn.Parameter(torch.ones_like(adj_ext4))
-        #         nn.init.constant_(self.adj_ext4_sub, 1e-6)
 
         if bias:
             self.bias = nn.Parameter(torch.zeros(out_features, dtype=torch.float))
@@ -373,19 +370,13 @@ class ExtendSkeletonGraphConv(nn.Module):
                 adj_ext3 = self.adj_ext3.to(input.device)
             adj_ext3 = (adj_ext3.T + adj_ext3) / 2
 
-        # if self.skeleton_graph == 4:
-        #     if self.NoAffinityModulation is not True:
-        #         adj_ext4 = self.adj_ext4.to(input.device) + self.adj_ext4_sub.to(input.device)
-        #     else:
-        #         adj_ext4 = self.adj_ext4.to(input.device)
-        #     adj_ext4 = (adj_ext4.T + adj_ext4) / 2
 
         E = torch.eye(adj.size(0), dtype=torch.float).to(input.device)
 
         # MM-GCN
         if self.skeleton_graph == 4:
-            WHA5 = torch.matmul(adj_ext4 * E, h0) + torch.matmul(adj_ext4 * (1 - E), h1)
-            C5 = self.Lamda5 * WHA5
+            # WHA5 = torch.matmul(adj_ext4 * E, h0) + torch.matmul(adj_ext4 * (1 - E), h1)
+            # C5 = self.Lamda5 * WHA5
             WHA4 = torch.matmul(adj_ext3 * E, h0) + torch.matmul(adj_ext3 * (1 - E), h1)
             C4 = self.Lamda4 * WHA4
             WHA3 = torch.matmul(adj_ext2 * E, h0) + torch.matmul(adj_ext2 * (1 - E), h1)
@@ -394,9 +385,9 @@ class ExtendSkeletonGraphConv(nn.Module):
             C2 = self.Lamda2 * WHA2
             WHA1 = torch.matmul(adj * E, h0) + torch.matmul(adj * (1 - E), h1)
             C1 = self.Lamda1 * WHA1
-            output_out = C1 + (1 - self.Lamda1) * C2 + ((1 - self.Lamda1) * ((1 - self.Lamda2) * C3)) + \
-                         ((1 - self.Lamda1) * ((1 - self.Lamda2) * ((1 - self.Lamda3) * C4))) + \
-                         ((1 - self.Lamda1) * ((1 - self.Lamda2) * ((1 - self.Lamda3) * ((1 - self.Lamda4) * C5))))
+            # output_out = C1 + (1 - self.Lamda1) * C2 + ((1 - self.Lamda1) * ((1 - self.Lamda2) * C3)) + \
+            #              ((1 - self.Lamda1) * ((1 - self.Lamda2) * ((1 - self.Lamda3) * C4))) + \
+            #              ((1 - self.Lamda1) * ((1 - self.Lamda2) * ((1 - self.Lamda3) * ((1 - self.Lamda4) * C5))))
         elif self.skeleton_graph == 3:
             WHA4 = torch.matmul(adj_ext3 * E, h0) + torch.matmul(adj_ext3 * (1 - E), h1)
             C4 = self.Lamda4 * WHA4
@@ -464,12 +455,23 @@ class _ResGraphConv(nn.Module):
 
         self.gconv1 = _GraphConv(adj, adj_ext1, adj_ext2, adj_ext3, input_dim, hid_dim, p_dropout)
         self.gconv2 = _GraphConv(adj, adj_ext1, adj_ext2, adj_ext3, hid_dim, output_dim, p_dropout)
+        self.bn = nn.BatchNorm1d(output_dim)
+        self.relu = nn.ReLU()
 
-    def forward(self, x):
-        residual = x
+    def forward(self, x, joints_features=None):
+
+        if joints_features is None:
+            residual = x
+        else:
+            joints_features = joints_features.transpose(1, 2).contiguous()
+            x = torch.cat([joints_features, x], dim=2)
+            residual = x
         out = self.gconv1(x)
         out = self.gconv2(out)
-        return residual + out
+        out = self.bn(residual.transpose(1, 2).contiguous() + out.transpose(1, 2).contiguous())
+        out = self.relu(out)
+
+        return out.transpose(1, 2).contiguous()
 
 
 blocks_dict = {
@@ -478,56 +480,132 @@ blocks_dict = {
 }
 
 
-class MMGCN(nn.Module):
-    # def __init__(self, adj, adj_ext1, adj_ext2, adj_ext3, adj_ext4, hid_dim, non_local=False, coords_dim=(2, 3),
-    #              num_layers=4, skeleton_graph=1, p_dropout=None):
-    def __init__(self, adj, adj_ext1, adj_ext2, adj_ext3, skeleton_graph, hid_dim, non_local=False, coords_dim=(2, 2),
+class FGMH_GCN(nn.Module):
+
+    def __init__(self, adj, adj_ext1, adj_ext2, adj_ext3, skeleton_graph, hid_dim, output_joints, heatmap_size,
+                 non_local=False, coords_dim=(2, 2),
                  num_layers=4, p_dropout=None):
-        super(MMGCN, self).__init__()
+        super(FGMH_GCN, self).__init__()
 
         self.non_local = non_local
+        self.joints = output_joints
         _gconv_input = [
             _GraphConv(adj, adj_ext1, adj_ext2, adj_ext3, coords_dim[0], hid_dim, skeleton_graph=skeleton_graph,
                        p_dropout=p_dropout)]
         _gconv_layers = []
+        self.level_conv = nn.Conv2d(output_joints, output_joints, 3, stride=1, padding=1)
 
-        for i in range(num_layers):
+        self.FC = nn.Sequential(
+            nn.Sequential(nn.Linear((heatmap_size[0] * 2) * (heatmap_size[1] * 2), 1024), nn.ReLU(inplace=True)),
+            nn.Sequential(nn.Linear(1024, 1024), nn.ReLU(inplace=True)),
+            nn.Linear(1024, 2))
+
+        for i in range(num_layers - 1):
             _gconv_layers.append(_ResGraphConv(adj, adj_ext1, adj_ext2, adj_ext3, hid_dim, hid_dim, hid_dim,
                                                p_dropout=p_dropout))
+
+        self.gconv_layer_last = _ResGraphConv(adj, adj_ext1, adj_ext2, adj_ext3, hid_dim + output_joints,
+                                              hid_dim + output_joints,
+                                              hid_dim + output_joints,
+                                              p_dropout=p_dropout)
 
         self.gconv_input = nn.Sequential(*_gconv_input)
         self.gconv_layers = nn.Sequential(*_gconv_layers)
 
-        self.gconv_output = ExtendSkeletonGraphConv(hid_dim, coords_dim[1], adj, adj_ext1, adj_ext2, adj_ext3,
+        self.gconv_output = ExtendSkeletonGraphConv(hid_dim + output_joints, coords_dim[1], adj, adj_ext1, adj_ext2,
+                                                    adj_ext3,
                                                     skeleton_graph=skeleton_graph)
 
         if self.non_local:
-            self.non_local = NONLocalBlock2D(in_channels=hid_dim, sub_sample=False)
+            self.non_local = NONLocalBlock2D(in_channels=hid_dim + output_joints, sub_sample=False)
 
-    def forward(self, x):
+    def forward(self, x, hm, features):
         batch_size = x.shape[0]
         if self.non_local is False:
             out = self.gconv_input(x)
             out = self.gconv_layers(out)
             out = self.gconv_output(out)
         else:
-            out = self.gconv_input(x)
-            out = self.gconv_layers(out)
-            out = out.unsqueeze(2)
-            out = out.permute(0, 3, 2, 1)
-            out = self.non_local(out)
-            out = out.permute(0, 3, 1, 2)
-            out = out.squeeze()
-            out = self.gconv_output(out)
+            # x = 32 17 2  hm 32 17 2   features 32 17 64 48
+            heatmap = self.level_conv(features)  # 32 17 64 48
+            bs = heatmap.shape[0]
+            heat_map_intergral = self.FC(heatmap.view(bs * self.joints, -1)).view(bs, self.joints * 2)
+            # heat_map_intergral = self.FC(heatmap.view(bs * 14, -1)).view(bs, 28)
+            hm_4 = heat_map_intergral.view(-1, 17, 2)
+            # hm_4 = heat_map_intergral.view(-1, 14, 2)
+            j_1_4 = F.grid_sample(heatmap, hm_4[:, None, :, :]).squeeze(2)  # 32 17 17
+            out = self.gconv_input(x)  # 32 17 128
+            out = self.gconv_layers(out)  # 32 17 128
+            out = self.gconv_layer_last(out, joints_features=j_1_4)
+            out = out.unsqueeze(2)  # 32 17 1 128
+            out = out.permute(0, 3, 2, 1)  # 32 128 1 17
+            out = self.non_local(out)  # 32 128 1 17
+            out = out.permute(0, 3, 1, 2)  # 32 17 128 1
+            out = out.squeeze()  # 32 17 128
+            out = self.gconv_output(out)  # 32 17 2
         return out
 
 
-class PoseHighResolutionNet(nn.Module):
+class GlobalAveragePooling2D(nn.Module):
+    def __init__(self, output_size):
+        super(GlobalAveragePooling2D, self).__init__()
+        self.pooler = nn.AdaptiveAvgPool2d(output_size)
+
+    def forward(self, x):
+        b, c, h, w = x.size()
+        x = self.pooler(x)
+        x = x.reshape(b, c)
+        return x
+
+
+class SingleHead(nn.Module):
+    """
+    Build single head with convolutions and coord conv.
+    """
+
+    def __init__(self, in_channel, conv_dims, num_convs, coord=False, norm=True):
+        super().__init__()
+        self.coord = coord
+        conv_norm_relus = []
+        for k in range(num_convs):
+            if coord:
+                in_channel += 2
+            conv_norm_relus.append(nn.Conv2d(
+                in_channel if k == 0 else conv_dims,
+                conv_dims,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+                bias=False
+            ))
+            if norm:
+                conv_norm_relus.append(nn.BatchNorm2d(conv_dims))
+            conv_norm_relus.append(nn.ReLU())
+        self.conv_norm_relus = nn.Sequential(*conv_norm_relus)
+
+    def forward(self, x):
+        if self.coord:
+            x = self.coord_conv(x)
+        x = self.conv_norm_relus(x)
+        return x
+
+    def coord_conv(self, feat):
+        with torch.no_grad():
+            x_pos = torch.linspace(-1, 1, feat.shape[-2])
+            y_pos = torch.linspace(-1, 1, feat.shape[-1])
+            grid_x, grid_y = torch.meshgrid(x_pos, y_pos)
+            grid_x = grid_x.unsqueeze(0).unsqueeze(1).expand(feat.shape[0], -1, -1, -1).to(feat.device)
+            grid_y = grid_y.unsqueeze(0).unsqueeze(1).expand(feat.shape[0], -1, -1, -1).to(feat.device)
+        feat = torch.cat([feat, grid_x, grid_y], dim=1)
+        return feat
+
+
+class PoseDAG(nn.Module):
 
     def __init__(self, cfg, **kwargs):
         self.inplanes = 64
         extra = cfg['MODEL']['EXTRA']
-        super(PoseHighResolutionNet, self).__init__()
+        super(PoseDAG, self).__init__()
 
         # stem net
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=2, padding=1,
@@ -538,7 +616,7 @@ class PoseHighResolutionNet(nn.Module):
         self.bn2 = nn.BatchNorm2d(64, momentum=BN_MOMENTUM)
         self.relu = nn.ReLU(inplace=True)
         self.layer1 = self._make_layer(Bottleneck, 64, 4)
-
+        self.scale_factor = cfg.MODEL.UP_SCALE
         self.stage2_cfg = extra['STAGE2']
         num_channels = self.stage2_cfg['NUM_CHANNELS']
         block = blocks_dict[self.stage2_cfg['BLOCK']]
@@ -570,7 +648,39 @@ class PoseHighResolutionNet(nn.Module):
             pre_stage_channels, num_channels)
         self.stage4, pre_stage_channels = self._make_stage(
             self.stage4_cfg, num_channels, multi_scale_output=False)
-        self.scale_factor = cfg.MODEL.UP_SCALE
+
+        self.context_head = nn.Sequential(
+            *[SingleHead(pre_stage_channels[0], pre_stage_channels[0], 1, coord=False, norm=True),
+              GlobalAveragePooling2D(1),
+              nn.Linear(pre_stage_channels[0], pre_stage_channels[0], bias=False),
+              nn.BatchNorm1d(pre_stage_channels[0], momentum=BN_MOMENTUM),
+              nn.ReLU()]
+        )
+        self.context_predictor = nn.Sequential(*[nn.Linear(pre_stage_channels[0], cfg['MODEL']['NUM_JOINTS']),
+                                                 nn.Sigmoid()])
+        self.kpt_layer = nn.Conv2d(
+            in_channels=pre_stage_channels[0],
+            out_channels=cfg.MODEL.NUM_JOINTS,
+            kernel_size=extra.FINAL_CONV_KERNEL,
+            stride=1,
+            padding=1 if extra.FINAL_CONV_KERNEL == 3 else 0
+        )
+        self.parts_predictor = nn.Conv2d(
+            in_channels=pre_stage_channels[0],
+            out_channels=cfg.MODEL.NUM_JOINTS,
+            kernel_size=3,
+            stride=1,
+            padding=1
+        )
+        self.channel_att = ChannelAttention(pre_stage_channels[0], pre_stage_channels[0])
+        self.concat_predict = nn.Conv2d(
+            in_channels=pre_stage_channels[0] * 2,
+            out_channels=pre_stage_channels[0],
+            kernel_size=extra['FINAL_CONV_KERNEL'],
+            stride=1,
+            padding=1 if extra['FINAL_CONV_KERNEL'] == 3 else 0
+        )
+
         self.final_layer = nn.Conv2d(
             in_channels=pre_stage_channels[0],
             out_channels=cfg['MODEL']['NUM_JOINTS'],
@@ -673,40 +783,10 @@ class PoseHighResolutionNet(nn.Module):
 
         return nn.Sequential(*modules), num_inchannels
 
-    # def generate_2d_integral_preds_tensor(self, heatmaps, num_joints, x_dim, y_dim):
-    #     assert isinstance(heatmaps, torch.Tensor)
-    #
-    #     heatmaps = heatmaps.reshape((heatmaps.shape[0], num_joints, y_dim, x_dim))
-    #
-    #     accu_x = heatmaps.sum(dim=2)
-    #     accu_y = heatmaps.sum(dim=3)
-    #
-    #     accu_x = accu_x * torch.cuda.comm.broadcast(torch.arange(x_dim).type(torch.cuda.FloatTensor),
-    #                                                 devices=[accu_x.device.index])[0]
-    #     accu_y = accu_y * torch.cuda.comm.broadcast(torch.arange(y_dim).type(torch.cuda.FloatTensor),
-    #                                                 devices=[accu_y.device.index])[0]
-    #
-    #     accu_x = accu_x.sum(dim=2, keepdim=True)
-    #     accu_y = accu_y.sum(dim=2, keepdim=True)
-    #
-    #     return accu_x, accu_y
+    def _sample_feats(self, features, pos_ind):
+        feats = features[:, :, pos_ind[0] // 2:pos_ind[0] // 2 + 1, pos_ind[1] // 2:pos_ind[1] // 2 + 1]
 
-    # def softmax_integral_tensor(self, preds, num_joints, hm_width, hm_height):
-    #     # global soft max
-    #     preds = preds.reshape((preds.shape[0], num_joints, -1))
-    #     preds = F.softmax(preds, 2)
-    #     score = torch.max(preds, -1)[0]
-    #
-    #     # integrate heatmap into joint location
-    #
-    #     x, y = self.generate_2d_integral_preds_tensor(preds, num_joints, hm_width, hm_height)
-    #     x = x / float(hm_width) - 0.5
-    #     y = y / float(hm_height) - 0.5
-    #
-    #     preds = torch.cat((x, y), dim=2)
-    #     preds *= 2
-    #     preds = preds.reshape((preds.shape[0], num_joints * 2))
-    #     return preds, score
+        return feats
 
     def forward(self, x):
         x = self.conv1(x)
@@ -732,7 +812,7 @@ class PoseHighResolutionNet(nn.Module):
             else:
                 x_list.append(y_list[i])
         y_list = self.stage3(x_list)
-
+        stage3_outputs = y_list[0] * 1.
         x_list = []
         for i in range(self.stage4_cfg['NUM_BRANCHES']):
             if self.transition3[i] is not None:
@@ -740,12 +820,29 @@ class PoseHighResolutionNet(nn.Module):
             else:
                 x_list.append(y_list[i])
         y_list = self.stage4(x_list)
-        if self.scale_factor > 1:
-            y_list[0] = F.interpolate(y_list[0], scale_factor=self.scale_factor, mode="bilinear",
-                                      align_corners=False)
-        x = self.final_layer(y_list[0])
 
-        return x
+        context_embeddings = self.context_head(y_list[0] * 1.)  # 1 * 32  # region context embedding
+        context_scores = self.context_predictor(context_embeddings)  # 1 * 17 # keypoint-wise classifier
+        init_features = y_list[0] * 1.
+        instance_coord = np.array((stage3_outputs.shape[2], stage3_outputs.shape[3]))
+        instance_param = self._sample_feats(stage3_outputs, instance_coord)  # 1 17 1 1
+        B, C, H, W = instance_param.shape
+        instance_param = instance_param.reshape(B * C, -1)
+        linear = nn.Linear(instance_param.shape[1], 1, bias=False).to(instance_param.device)
+        instance_param = linear(instance_param).reshape(B, C)
+        catt_features = self.channel_att(stage3_outputs, instance_param)
+        concat_features = torch.cat([init_features, catt_features], dim=1)
+        pose_features = self.concat_predict(concat_features)
+        if self.scale_factor > 1:
+            catt_features = F.interpolate(catt_features, scale_factor=self.scale_factor, mode="bilinear",
+                                          align_corners=False)  # 1 32 128 96
+            pose_features = F.interpolate(pose_features, scale_factor=self.scale_factor, mode="bilinear",
+                                          align_corners=False)
+
+        pose_score = self.kpt_layer(pose_features)  # 1 17 128 96
+        parts_score = self.parts_predictor(catt_features)
+
+        return pose_score, parts_score, context_scores
 
     def init_weights(self, pretrained=''):
         logger.info('=> init weights from normal distribution')
@@ -781,7 +878,7 @@ class PoseHighResolutionNet(nn.Module):
 
 
 def get_pose_net(cfg, is_train, **kwargs):
-    model = PoseHighResolutionNet(cfg, **kwargs)
+    model = PoseDAG(cfg, **kwargs)
 
     if is_train and cfg['MODEL']['INIT_WEIGHTS']:
         model.init_weights(cfg['MODEL']['PRETRAINED'])
@@ -790,8 +887,10 @@ def get_pose_net(cfg, is_train, **kwargs):
 
 
 def get_gcn_net(cfg, adj, adj_ext_1, adj_ext_2, adj_ext_3, is_train, **kwargs):
-    model = MMGCN(adj, adj_ext_1, adj_ext_2, adj_ext_3, skeleton_graph=cfg['GCN']['SKELETON_GRAPH'],
-                  hid_dim=cfg['GCN']['CHANNELS'], non_local=cfg['GCN']['Non_Local'],
-                  num_layers=cfg['GCN']['NUM_LAYERS'], p_dropout=cfg['GCN']['P_DROPOUT'])
+    model = FGMH_GCN(adj, adj_ext_1, adj_ext_2, adj_ext_3, skeleton_graph=cfg['GCN']['SKELETON_GRAPH'],
+                     hid_dim=cfg['GCN']['CHANNELS'], output_joints=cfg['MODEL']['NUM_JOINTS'],
+                     heatmap_size=cfg['MODEL']['HEATMAP_SIZE'],
+                     non_local=cfg['GCN']['Non_Local'],
+                     num_layers=cfg['GCN']['NUM_LAYERS'], p_dropout=cfg['GCN']['P_DROPOUT'])
 
     return model

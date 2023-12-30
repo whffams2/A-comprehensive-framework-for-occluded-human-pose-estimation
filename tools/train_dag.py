@@ -25,10 +25,10 @@ from tensorboardX import SummaryWriter
 import _init_paths
 from config import cfg
 from config import update_config
-# from core.loss import JointsMSELoss
-from core.loss import JointsL1Loss
-from core.function import train, gcn_train
-from core.function import validate, gcn_validate
+from core.loss import JointsMSELoss
+from core.loss import JointsL1Loss, BCELOSS
+from core.function_dag import train, gcn_train
+from core.function_dag import validate, gcn_validate
 from utils.utils import get_optimizer
 from utils.utils import save_checkpoint
 from utils.utils import create_logger
@@ -116,20 +116,30 @@ def main():
         (1, 3, cfg.MODEL.IMAGE_SIZE[1], cfg.MODEL.IMAGE_SIZE[0])
     )
     # writer_dict['writer'].add_graph(model, (dump_input, ))
-
     logger.info(get_model_summary(model, dump_input))
+    
 
+    # device = torch.device("cuda:1" )
+    # model = torch.nn.DataParallel(model, device_ids=cfg.GPUS).to(device)
+    # gcn = torch.nn.DataParallel(gcn, device_ids=cfg.GPUS).to(device)
     model = torch.nn.DataParallel(model, device_ids=cfg.GPUS).cuda()
     gcn = torch.nn.DataParallel(gcn, device_ids=cfg.GPUS).cuda()
 
     # define loss function (criterion) and optimizer
-    # criterion = JointsMSELoss(
+    # criterion_heatmap = JointsMSELoss(
     #     use_target_weight=cfg.LOSS.USE_TARGET_WEIGHT
-    # ).cuda()
+    # ).to(device)
+    # criterion = JointsL1Loss(
+    #     use_target_weight=cfg.LOSS.USE_TARGET_WEIGHT
+    # ).to(device)
+    # criterion_sem = BCELOSS().to(device)
+    criterion_heatmap = JointsMSELoss(
+        use_target_weight=cfg.LOSS.USE_TARGET_WEIGHT
+    ).cuda()
     criterion = JointsL1Loss(
         use_target_weight=cfg.LOSS.USE_TARGET_WEIGHT
     ).cuda()
-
+    criterion_sem = BCELOSS().cuda()
     # Data loading code
     normalize = transforms.Normalize(
         mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
@@ -197,18 +207,12 @@ def main():
         lr_scheduler.step()
 
         # train for one epoch
-        # train(cfg, train_loader, model, gcn, criterion, optimizer, gcn_optimizer, epoch,
-        #       final_output_dir, tb_log_dir, writer_dict)
-        gcn_train(cfg, train_loader, model, gcn, criterion, optimizer, gcn_optimizer, epoch,
-                  final_output_dir, tb_log_dir, writer_dict)
-        # train(cfg, train_loader, model, criterion, optimizer, epoch,
-        #       final_output_dir, tb_log_dir, writer_dict)
+        gcn_train(cfg, train_loader, model, gcn, criterion, criterion_heatmap, criterion_sem,
+                  optimizer, gcn_optimizer,
+                  epoch, final_output_dir, tb_log_dir, writer_dict)
         # evaluate on validation set
         if ((epoch) % cfg.TEST.INTERVAL == 0 or cfg.TRAIN.END_EPOCH == (epoch + 1)):
-            # perf_indicator = gcn_validate(
-            #     cfg, valid_loader, valid_dataset, model, gcn, criterion,
-            #     final_output_dir, tb_log_dir, writer_dict
-            # )
+
             perf_indicator = gcn_validate(
                 cfg, valid_loader, valid_dataset, model, gcn, criterion,
                 final_output_dir, tb_log_dir, writer_dict
