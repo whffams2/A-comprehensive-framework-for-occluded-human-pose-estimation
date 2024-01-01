@@ -10,7 +10,7 @@ Occlusion presents a significant challenge in human pose estimation. The challen
 1. The environment installation can follow [REDAME.md](https://github.com/leoxiaobin/deep-high-resolution-net.pytorch/blob/master/README.md) 
 2. The details about dataset can be referred to [REDAME.md](https://github.com/leoxiaobin/deep-high-resolution-net.pytorch/blob/master/README.md) 
 3. Download the hrnet pretrained weights from [GoogleDrive](https://drive.google.com/drive/folders/1hOTihvbyIxsm5ygDpbUuJ7O_tzv4oXjC?usp=sharing) or  [OneDrive](https://1drv.ms/f/s!AhIXJn_J-blW231MH2krnmLq5kkQ)
-4. Download the DAG  pretrained weights from [BaiduNetdisk](https://pan.baidu.com/s/1sIWLMGxiW_imh3Ww7IAeCw?pwd=4vyb ) or [GoogleDrive](https://drive.google.com/drive/folders/1wvWwM5vnFhZbB7YWwidfhSFJ h1PLHfum?usp=drive_link) or [OneDrive]([DAG](https://1drv.ms/f/s!AguyI3aFOsEAiR35Czx_ICSWGQ39?e=KKPu42))
+4. Download the DAG  pretrained weights from [BaiduNetdisk](https://pan.baidu.com/s/1sIWLMGxiW_imh3Ww7IAeCw?pwd=4vyb ) or [GoogleDrive](https://drive.google.com/drive/folders/1wvWwM5vnFhZbB7YWwidfhSFJh1PLHfum?usp=drive_link) or [OneDrive]([DAG](https://1drv.ms/f/s!AguyI3aFOsEAiR35Czx_ICSWGQ39?e=KKPu42))
 
 ### Training and Testing
 
