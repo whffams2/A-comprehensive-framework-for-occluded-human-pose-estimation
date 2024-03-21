@@ -33,7 +33,18 @@ python tools/train_dag.py \
 
 
 ### Citation
-Will be updated after ICASSP'24 proceedings is released
+```latex
+@INPROCEEDINGS{10448372,
+  author={Xu, Linhao and Zhao, Lin and Sun, Xinxin and Wang, Di and Li, Guangyu and Yan, Kedong},
+  booktitle={ICASSP 2024 - 2024 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP)}, 
+  title={A Comprehensive Framework for Occluded Human Pose Estimation}, 
+  year={2024},
+  volume={},
+  number={},
+  pages={3405-3409},
+  keywords={Degradation;Codes;Annotations;Pose estimation;Benchmark testing;Signal processing;Data augmentation;Human Pose Estimation;GCN;Occlusion Scenes Analysis},
+  doi={10.1109/ICASSP48485.2024.10448372}}
+```
 
 ### Acknowledgement
 
